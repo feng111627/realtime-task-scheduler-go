@@ -82,6 +82,7 @@ func (s *Scheduler) unlockTask(t *Task, m *Mutex) error {
 		next.waitingOn = nil
 		m.owner = next
 		next.held = append(next.held, m)
+		s.logf("lock %s handed to task %d", m.Name, next.ID)
 		s.wake(next)
 		s.refreshInheritance(next)
 	}

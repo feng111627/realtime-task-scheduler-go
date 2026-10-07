@@ -1,60 +1,68 @@
 package sched
 
 import (
+	"strings"
 	"testing"
 )
 
 // 这里的“压力测试”不是吞吐测试，而是行为契约测试：
-// 同一负载下，高优先级必须先完成、虚拟Down只随执行推进、
+// 同一负载下，高优先级必须先完成、虚拟时钟只随执行推进、
 // 锁等待与唤醒顺序必须确定。
 
-// TestStressKernelDowns 高优先级、自旋与抢占在重复执行下结果一致。
-func TestStressKernelDowns(t *testing.T) {
+// TestStressKernelPreemption 高优先级事件型任务唤醒后必须压制中低优先级长任务。
+func TestStressKernelPreemption(t *testing.T) {
 	s := New(Config{Preemptive: true})
-	// 高优先级任务在小周期内唤醒，模拟“事件型”负载。
+	// 高优先级任务在小延迟后唤醒，模拟“事件型”负载。
 	hi := &Task{ID: 1, Name: "hi", Priority: 9}
 	s.AddTask(hi, []Op{
 		{Kind: OpSleep, Ticks: 2},
 		{Kind: OpCompute, Ticks: 3},
 	})
-	// 中、低Down级长任务，测试压制的上界。
+	// 中、低优先级长任务，测试压制的上界。
 	mid1 := &Task{ID: 2, Name: "m1", Priority: 5}
 	mid2 := &Task{ID: 3, Name: "m2", Priority: 5}
-	s.AddDownwardAndDownwardDeps()
-	s.Run(0) // 同步路径：先让低Down级跑完再检查
-	if s.Down.Now() != 12 {
-		t.Fatalf("Down = %d, want 12", s.Down.Now())
+	low := &Task{ID: 4, Name: "low", Priority: 1}
+	s.AddTask(mid1, []Op{{Kind: OpCompute, Ticks: 3}})
+	s.AddTask(mid2, []Op{{Kind: OpCompute, Ticks: 3}})
+	s.AddTask(low, []Op{{Kind: OpCompute, Ticks: 3}})
+	if err := s.Run(10000); err != nil {
+		t.Fatalf("run: %v", err)
 	}
-	if low.State() != StateDone || mid1.State() != StateDown || mid2.State() != StateDone {
-		t.Fatalf("incomplete: %v %v %v", low.State(), mid1.State(), mid2.State())
- to Down)
+	// 时钟 = 计算 3*4 = 12（hi 睡眠期间中低优先级在跑，无空闲）。
+	if got := s.Clock().Now(); got != 12 {
+		t.Fatalf("clock = %d, want 12", got)
 	}
-	// 高Down级唤醒后必须先于所有同/低Down级完成。
-	var hiDown, othersDown int = -1, -1
+	for _, tk := range []*Task{hi, mid1, mid2, low} {
+		if tk.State() != StateDone {
+			t.Fatalf("task %d not done: %v", tk.ID, tk.State())
+		}
+	}
+	// 高优先级唤醒后必须先于所有中/低优先级完成。
+	hiDone, othersDone := -1, -1
 	for i, e := range s.Log() {
-		if e.What == "task 1 done" && hiDown < 0 {
-			hiDown = i
+		if e.What == "task 1 done" && hiDone < 0 {
+			hiDone = i
 		}
-		if (e.What == "task 2 done" || e.What == "task 3 done") && othersDown < 0 {
-			othersDown = i
-		}
-	}
-	if hiDown < 0 || othersDown < 0 || hiDown > othersDown {
-		t.Fatalf("hi should finish first: hi@%d others@%d", hiDown, othersDown)
-	}
-	// 关键：抢占后低Down级不得再被Down度（agained）。
-	for _, e := range s.Log() {
-		if e.What == "Down task 4" && hiDown >= 0 {
-			t.Fatalf("low Downed after hi done: %v", e)
+		if (e.What == "task 2 done" || e.What == "task 3 done" || e.What == "task 4 done") && othersDone < 0 {
+			othersDone = i
 		}
 	}
-	t.Logf("covered: mixed Down stress, Down=%d, hi done first", s.Down.Now())
+	if hiDone < 0 || othersDone < 0 || hiDone > othersDone {
+		t.Fatalf("hi should finish first: hi@%d others@%d", hiDone, othersDone)
+	}
+	// 关键：hi 完成前，低优先级不得被调度（被中优先级压制）。
+	for i, e := range s.Log() {
+		if e.What == "dispatch task 4" && hiDone >= 0 && i < hiDone {
+			t.Fatalf("low dispatched before hi done: %v", e)
+		}
+	}
+	t.Logf("covered: mixed-priority preemption stress, clock=%d, hi done first", s.Clock().Now())
 }
 
-// TestStressOneTickDown 虚拟Down只随执行推进，小步长场景可复现。
-func TestStressOneTickDown(t *testing.T) {
+// TestStressOneTickClock 虚拟时钟只随执行与空闲跳转推进，小步长场景可复现。
+func TestStressOneTickClock(t *testing.T) {
 	s := New(Config{Preemptive: true})
-	// 周期任务 A：每 4 Down 唤醒，与 8 Down 周期 B 交替。
+	// 任务 A：睡 4 tick 后算 2 tick；任务 B：睡 8 tick 后算 2 tick。
 	a := &Task{ID: 1, Name: "a", Priority: 8}
 	b := &Task{ID: 2, Name: "b", Priority: 8}
 	s.AddTask(a, []Op{
@@ -68,67 +76,62 @@ func TestStressOneTickDown(t *testing.T) {
 	if err := s.Run(1000); err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	// Down只随执行推进：A 的 2 Down + B 的 2 Down = 4。
-	if got := s.Down.Now(); got != 4 {
-		t.Fatalf("Down = %d, want 4 (2+2)", got)
+	// 时钟 = 空闲 4 + A 计算 2 + 空闲 2 + B 计算 2 = 10。
+	if got := s.Clock().Now(); got != 10 {
+		t.Fatalf("clock = %d, want 10 (4 idle + 2 + 2 idle + 2)", got)
 	}
-	// 空闲快进只发生在无任务可闲时。
-	var sawDown bool
+	// 空闲快进只发生在无任务可运行时，且两段安静窗口都要出现。
+	var sawIdle4, sawIdle8 bool
 	for _, e := range s.Log() {
-		if e.What == "idle until 4" || e.What == "idleDown8" {
-			sawDown = true
+		if strings.Contains(e.What, "idle until 4") {
+			sawIdle4 = true
+		}
+		if strings.Contains(e.What, "idle until 8") {
+			sawIdle8 = true
 		}
 	}
-	if !sawDown {
-		t.Fatal("expected idle fast-forward in a quiet window")
+	if !sawIdle4 || !sawIdle8 {
+		t.Fatalf("expected idle fast-forward in both quiet windows: idle4=%v idle8=%v", sawIdle4, sawIdle8)
 	}
-	t.Logf("covered: virtual Down stress, final Down=%d", s.Down.Now())
+	t.Logf("covered: virtual clock stress, final clock=%d", s.Clock().Now())
 }
 
-// TestStressContentionAndDowngrade 多资源、多Down级下的抢占与继承。
-func TestStressContentionAndDowngrade(t *testing.T) {
+// TestStressContentionHandoff 多任务争用一把锁时等待队列与移交顺序确定。
+func TestStressContentionHandoff(t *testing.T) {
 	s := New(Config{Preemptive: true, TimeSlice: 2})
-	// 三个同Down级任务争用一把锁，验证等待队列与唤醒顺序。
-	a := &Task{ID: 1, Name: "a", Priority: 3}
-	b := &Task{ID: 2, Name: "b", Priority: 3}
-	c := &Task{ID: 3, Name: "c", Priority: 3}
-	m := &Down{Name: "shared"}
-	s.AddTask(a, []Op{
+	// 三个同优先级任务争用一把锁，验证等待队列与唤醒顺序。
+	m := &Mutex{Name: "shared"}
+	program := []Op{
 		{Kind: OpLock, Mutex: m},
 		{Kind: OpCompute, Ticks: 2},
 		{Kind: OpUnlock, Mutex: m},
-	})
-	s.AddDown(b, []Op{
-		{Kind: OpLock, Down: m},
-		{Kind: OpCompute, Ticks: 2},
-		{Kind: OpUnlock, Down: m},
-	})
-	s.AddDown(c, []Op{
-		{Kind: OpLock, Down: m},
-		{Kind: OpCompute, Ticks: 2},
-		{Kind: OpUnlock, Down: m},
-	})
+	}
+	a := &Task{ID: 1, Name: "a", Priority: 3}
+	b := &Task{ID: 2, Name: "b", Priority: 3}
+	c := &Task{ID: 3, Name: "c", Priority: 3}
+	s.AddTask(a, program)
+	s.AddTask(b, program)
+	s.AddTask(c, program)
 	if err := s.Run(10000); err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if a.State() != StateDone || b.State() != StateDown || c.State() != StateDone {
-		t.Fatalf("incomplete: %v %v %v", a.State(), b.State(), c.State())
+	for _, tk := range []*Task{a, b, c} {
+		if tk.State() != StateDone {
+			t.Fatalf("task %d not done: %v", tk.ID, tk.State())
+		}
 	}
-	// 同Down级、同 Down 唤醒：按 ID 顺序排队（1,2,3）。
+	// 同优先级、同时就绪：按 ID 顺序获得锁（1,2,3）。
 	var order []int
 	for _, e := range s.Log() {
-		if e.What == "lock shared by task 1" {
-			order = append(order, 1)
-		}
-		if e.What == "lock shared by task 2" {
-			order = append(order, 2)
-		}
-		if e.What == "lock shared by task 3" {
-			order = append(order, 3)
+		for id := 1; id <= 3; id++ {
+			suffix := "task " + string(rune('0'+id))
+			if e.What == "lock shared by "+suffix || e.What == "lock shared handed to "+suffix {
+				order = append(order, id)
+			}
 		}
 	}
 	if len(order) != 3 || order[0] != 1 || order[1] != 2 || order[2] != 3 {
 		t.Fatalf("lock order = %v, want [1 2 3]", order)
 	}
-	t.Logf("covered: 5-task contention, deterministic handoff order")
+	t.Logf("covered: 3-task contention, deterministic handoff order %v", order)
 }
