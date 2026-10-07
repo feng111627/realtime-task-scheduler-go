@@ -65,7 +65,8 @@ func (s *Scheduler) AddTask(t *Task, program []Op) {
 	s.logf("task %d (%s) added, prio %d", t.ID, t.Name, t.Priority)
 }
 
-// AddPeriodic 注册一个周期任务，首次释放于 tick 0。
+// AddPeriodic 注册一个周期任务，首次释放于当前虚拟时刻（初始化时为 tick 0，
+// 运行期加入时为加入时刻）。
 // period 为周期，deadline 为相对截止时间（0 表示不监控），
 // budget 为每个周期的执行预算（0 表示不监控），policy 为超时处理策略。
 func (s *Scheduler) AddPeriodic(t *Task, program []Op, period, deadline, budget uint64, policy TimeoutPolicy) {
@@ -76,9 +77,9 @@ func (s *Scheduler) AddPeriodic(t *Task, program []Op, period, deadline, budget 
 	t.budget = budget
 	t.policy = policy
 	t.state = StateBlocked // 等待首次释放
-	t.nextRelease = 0
+	t.nextRelease = s.clock.Now()
 	s.tasks = append(s.tasks, t)
-	s.events.push(0, evRelease, t)
+	s.events.push(t.nextRelease, evRelease, t)
 	s.logf("periodic task %d (%s) added, prio %d period %d", t.ID, t.Name, t.Priority, period)
 }
 
@@ -142,6 +143,11 @@ func (s *Scheduler) runUntil(stopTick, maxSteps uint64) error {
 		}
 		// 2.5 处理当前时刻到期的全部控制指令（事件之后、抢占之前）。
 		s.processCommands()
+		// 2.6 指令可能产生新的到期事件（如运行期加入周期任务的首次释放），
+		// 在同一时刻补处理，保证指令在其生效 tick 内完整落地。
+		for s.events.len() > 0 && s.events.peek().tick <= s.clock.Now() {
+			s.dispatch(s.events.pop())
+		}
 		// 3. 抢占检查（关闭抢占时跳过）。
 		if s.cfg.Preemptive {
 			s.preemptIfNeeded()
