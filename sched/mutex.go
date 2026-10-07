@@ -88,6 +88,31 @@ func (s *Scheduler) unlockTask(t *Task, m *Mutex) error {
 	return nil
 }
 
+// removeWaiter 把任务从等待队列移除（用于运行期挂起等锁任务）。
+func (m *Mutex) removeWaiter(t *Task) {
+	for i, w := range m.waiters {
+		if w == t {
+			m.waiters = append(m.waiters[:i], m.waiters[i+1:]...)
+			return
+		}
+	}
+}
+
+// sortWaiters 按 (有效优先级降序, 任务ID升序) 重排等待队列。
+// 运行期调整优先级后调用，保证等待顺序与新优先级一致。
+func (m *Mutex) sortWaiters() {
+	for i := 1; i < len(m.waiters); i++ {
+		for j := i; j > 0; j-- {
+			a, b := m.waiters[j-1], m.waiters[j]
+			if a.EffectivePriority() > b.EffectivePriority() ||
+				(a.EffectivePriority() == b.EffectivePriority() && a.ID < b.ID) {
+				break
+			}
+			m.waiters[j-1], m.waiters[j] = b, a
+		}
+	}
+}
+
 // insertWaiter 按 (有效优先级降序, 任务ID升序) 将任务插入等待队列。
 func (m *Mutex) insertWaiter(t *Task) {
 	i := 0

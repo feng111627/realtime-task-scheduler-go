@@ -28,6 +28,9 @@ type Scheduler struct {
 	current   *Task
 	sliceLeft uint64 // 当前任务剩余时间片
 
+	cmds       cmdQueue   // 运行期控制指令队列
+	cmdResults []CmdResult // 已处理指令的结果
+
 	log    []LogEntry
 	alarms []Alarm
 }
@@ -123,12 +126,12 @@ func (s *Scheduler) runUntil(stopTick, maxSteps uint64) error {
 		if stopTick > 0 && s.clock.Now() >= stopTick {
 			return nil
 		}
-		// 1. 空闲时快进到下一事件时刻（无任务可运行，不计入任何任务）。
+		// 1. 空闲时快进到下一事件/指令时刻（无任务可运行，不计入任何任务）。
 		if s.current == nil && len(s.ready) == 0 {
-			if s.events.len() == 0 {
+			next, ok := s.nextPendingTick()
+			if !ok {
 				return nil // 全部完成
 			}
-			next := s.events.peek().tick
 			if next > s.clock.Now() {
 				s.logf("idle until %d", next)
 				s.clock.advance(next - s.clock.Now())
@@ -138,6 +141,8 @@ func (s *Scheduler) runUntil(stopTick, maxSteps uint64) error {
 		for s.events.len() > 0 && s.events.peek().tick <= s.clock.Now() {
 			s.dispatch(s.events.pop())
 		}
+		// 2.5 同 tick 的外部指令在内部事件之后处理（确定性顺序：先事件后指令）。
+		s.processCommands()
 		// 3. 抢占检查（关闭抢占时跳过）。
 		if s.cfg.Preemptive {
 			s.preemptIfNeeded()
@@ -165,6 +170,19 @@ func (s *Scheduler) runUntil(stopTick, maxSteps uint64) error {
 			s.current = nil
 		}
 	}
+}
+
+// nextPendingTick 返回下一个待处理时刻（事件与指令取较小者），
+// ok=false 表示事件与指令队列均为空。
+func (s *Scheduler) nextPendingTick() (uint64, bool) {
+	tick, ok := uint64(0), false
+	if s.events.len() > 0 {
+		tick, ok = s.events.peek().tick, true
+	}
+	if ct, cok := s.nextCmdTick(); cok && (!ok || ct < tick) {
+		tick, ok = ct, true
+	}
+	return tick, ok
 }
 
 // dispatch 处理一个到期事件。

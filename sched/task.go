@@ -85,6 +85,9 @@ type Task struct {
 	held      []*Mutex // 当前持有的锁
 	waitingOn *Mutex   // 正在等待的锁（阻塞原因）
 
+	// 运行期控制
+	suspLockWait bool // 挂起时正在等锁（pc 已回滚，恢复后重新加锁）
+
 	// 统计
 	execTicks uint64
 }
