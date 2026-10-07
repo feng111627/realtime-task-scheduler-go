@@ -293,9 +293,9 @@ func TestCmdAddTaskAtRuntime(t *testing.T) {
 		{Kind: OpCompute, Ticks: 1},
 	})
 	s.Submit(5, Command{
-		Kind:     CmdAddTask,
-		NewTask:  &Task{ID: 2, Name: "late", Priority: 3},
-		Program:  []Op{{Kind: OpCompute, Ticks: 2}},
+		Kind:    CmdAddTask,
+		NewTask: &Task{ID: 2, Name: "late", Priority: 3},
+		Program: []Op{{Kind: OpCompute, Ticks: 2}},
 	})
 	s.Submit(6, Command{Kind: CmdAddTask, NewTask: &Task{ID: 2}, Program: nil}) // 重复 ID
 	if err := s.Run(10000); err != nil {
@@ -328,12 +328,12 @@ func TestCmdRejectedOnDoneSuspendedUnknown(t *testing.T) {
 	s.AddTask(a, []Op{{Kind: OpCompute, Ticks: 1}}) // tick 1 即完成
 	s.AddTask(b, []Op{{Kind: OpCompute, Ticks: 10}})
 	s.Submit(2, Command{Kind: CmdSuspend, TaskID: 2})
-	s.Submit(3, Command{Kind: CmdInterrupt, TaskID: 1})  // 已 Done
-	s.Submit(3, Command{Kind: CmdInterrupt, TaskID: 2})  // 已 Suspended
-	s.Submit(3, Command{Kind: CmdResume, TaskID: 1})     // 已 Done（Done 优先于非挂起判定）
-	s.Submit(3, Command{Kind: CmdResume, TaskID: 2})     // 恢复挂起中的 2：生效
-	s.Submit(4, Command{Kind: CmdResume, TaskID: 2})     // 已恢复，非 Suspended
-	s.Submit(3, Command{Kind: CmdSuspend, TaskID: 99})   // 不存在
+	s.Submit(3, Command{Kind: CmdInterrupt, TaskID: 1})                // 已 Done
+	s.Submit(3, Command{Kind: CmdInterrupt, TaskID: 2})                // 已 Suspended
+	s.Submit(3, Command{Kind: CmdResume, TaskID: 1})                   // 已 Done（Done 优先于非挂起判定）
+	s.Submit(3, Command{Kind: CmdResume, TaskID: 2})                   // 恢复挂起中的 2：生效
+	s.Submit(4, Command{Kind: CmdResume, TaskID: 2})                   // 已恢复，非 Suspended
+	s.Submit(3, Command{Kind: CmdSuspend, TaskID: 99})                 // 不存在
 	s.Submit(3, Command{Kind: CmdSetPriority, TaskID: 1, Priority: 5}) // 已 Done
 	if err := s.Run(10000); err != nil {
 		t.Fatalf("run: %v", err)
@@ -348,8 +348,8 @@ func TestCmdRejectedOnDoneSuspendedUnknown(t *testing.T) {
 		{CmdRejected, ErrCmdTaskDone},
 		{CmdApplied, nil},
 		{CmdRejected, ErrCmdTaskUnknown},      // tick 3
-		{CmdRejected, ErrCmdTaskDone},          // tick 3
-		{CmdRejected, ErrCmdTaskNotSuspended},  // tick 4 的指令最后处理
+		{CmdRejected, ErrCmdTaskDone},         // tick 3
+		{CmdRejected, ErrCmdTaskNotSuspended}, // tick 4 的指令最后处理
 	}
 	res := s.CommandResults()
 	if len(res) != len(want) {

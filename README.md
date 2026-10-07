@@ -42,7 +42,7 @@
   `ErrCmdTaskUnknown`（任务不存在）、`ErrCmdTaskDone`（已结束）、
   `ErrCmdTaskSuspended` / `ErrCmdTaskNotSuspended`（挂起状态不匹配）、
   `ErrCmdTaskLockWait`（等锁任务不能中断唤醒）、
-  `ErrCmdTaskDuplicateTask`（重复 ID）、`ErrCmdNoTask`（缺少任务对象）。
+  `ErrCmdDuplicateTask`（重复 ID）、`ErrCmdNoTask`（缺少任务对象）。
 
 指向已结束或正被挂起任务的指令不会被悄悄吞掉，结果按 (tick, seq) 顺序完整记录。
 

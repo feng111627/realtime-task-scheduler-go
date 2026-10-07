@@ -274,6 +274,7 @@ func (s *Scheduler) removeReady(t *Task) {
 		}
 	}
 }
+
 // 等锁任务不能用中断唤醒（锁归属会悬空），返回可区分错误。
 // cmdSetPriority 运行中调整任务基础优先级。
 // 立即重排受影响的锁等待队列并沿等待链重算继承关系；

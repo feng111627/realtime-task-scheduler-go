@@ -28,7 +28,7 @@ type Scheduler struct {
 	current   *Task
 	sliceLeft uint64 // 当前任务剩余时间片
 
-	cmds       cmdQueue   // 运行期控制指令队列
+	cmds       cmdQueue    // 运行期控制指令队列
 	cmdResults []CmdResult // 已处理指令的结果
 
 	log    []LogEntry
