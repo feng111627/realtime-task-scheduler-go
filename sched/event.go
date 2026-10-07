@@ -62,6 +62,36 @@ func (q *eventQueue) push(tick uint64, kind eventKind, t *Task) {
 	}
 }
 
+// removeFor 移除指定任务的某类全部待处理事件（如中断取消睡眠唤醒）。
+// 移除后重建堆，保持确定性全序。
+func (q *eventQueue) removeFor(t *Task, kind eventKind) {
+	kept := q.items[:0]
+	for _, e := range q.items {
+		if e.task != t || e.kind != kind {
+			kept = append(kept, e)
+		}
+	}
+	q.items = kept
+	// 堆化：自底向上下沉。
+	for i := len(q.items)/2 - 1; i >= 0; i-- {
+		for j := i; ; {
+			l, r := 2*j+1, 2*j+2
+			m := j
+			if l < len(q.items) && less(q.items[l], q.items[m]) {
+				m = l
+			}
+			if r < len(q.items) && less(q.items[r], q.items[m]) {
+				m = r
+			}
+			if m == j {
+				break
+			}
+			q.items[j], q.items[m] = q.items[m], q.items[j]
+			j = m
+		}
+	}
+}
+
 // peek 返回队首事件，调用方需先确认 len>0。
 func (q *eventQueue) peek() event { return q.items[0] }
 

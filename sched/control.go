@@ -177,6 +177,8 @@ func (s *Scheduler) execCmd(it cmd) {
 		res.Status, res.Err = s.cmdInterrupt(it.c.TaskID)
 	case CmdSuspend:
 		res.Status, res.Err = s.cmdSuspend(it.c.TaskID)
+	case CmdResume:
+		res.Status, res.Err = s.cmdResume(it.c.TaskID)
 	case CmdSetPriority:
 		res.Status, res.Err = s.cmdSetPriority(it.c.TaskID, it.c.Priority)
 	case CmdAddTask:
@@ -220,7 +222,10 @@ func (s *Scheduler) cmdSuspend(id int) (CmdStatus, error) {
 			t.suspLockWait = true
 			s.refreshInheritance(m.owner)
 		}
-		// 睡眠中：保留 sleepUntil，恢复时按剩余时间重新入队唤醒事件。
+		// 睡眠中：取消待唤醒事件，恢复时按剩余时间重新注册。
+		if t.released && t.sleepUntil > s.clock.Now() {
+			s.events.removeFor(t, evWakeup)
+		}
 		// 等待下次释放：无额外状态需要处理。
 	}
 	t.state = StateSuspended
@@ -350,7 +355,9 @@ func (s *Scheduler) cmdInterrupt(id int) (CmdStatus, error) {
 	if !t.released {
 		return CmdRejected, ErrCmdTaskNotBlocked // 周期任务等待下次释放，无 job 可唤醒
 	}
-	// 睡眠中：立即唤醒。尚未到期的 evWakeup 事件之后会因状态守卫变为无操作。
+	// 睡眠中：立即唤醒，并取消尚未到期的唤醒事件（中断即取消剩余睡眠）。
+	s.events.removeFor(t, evWakeup)
+	t.sleepUntil = 0
 	s.wake(t)
 	s.logf("cmd interrupt wakes task %d", t.ID)
 	return CmdApplied, nil
