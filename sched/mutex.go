@@ -105,6 +105,21 @@ func (m *Mutex) insertWaiter(t *Task) {
 	m.waiters[i] = t
 }
 
+// sortWaiters 按 (有效优先级降序, 任务ID升序) 重排等待队列。
+// 运行期优先级变更后调用，保证等待顺序立即反映新优先级。
+func (m *Mutex) sortWaiters() {
+	for i := 1; i < len(m.waiters); i++ {
+		for j := i; j > 0; j-- {
+			a, b := m.waiters[j-1], m.waiters[j]
+			if a.EffectivePriority() > b.EffectivePriority() ||
+				(a.EffectivePriority() == b.EffectivePriority() && a.ID < b.ID) {
+				break
+			}
+			m.waiters[j-1], m.waiters[j] = b, a
+		}
+	}
+}
+
 // refreshInheritance 重算 t 的继承来源，并沿等待链向上传播。
 // 继承来源取 t 持有的所有锁的队首等待者中有效优先级最高者。
 func (s *Scheduler) refreshInheritance(t *Task) {

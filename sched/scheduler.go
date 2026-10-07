@@ -28,6 +28,8 @@ type Scheduler struct {
 	current   *Task
 	sliceLeft uint64 // 当前任务剩余时间片
 
+	control controlState // 运行期控制指令子系统
+
 	log    []LogEntry
 	alarms []Alarm
 }
@@ -123,12 +125,12 @@ func (s *Scheduler) runUntil(stopTick, maxSteps uint64) error {
 		if stopTick > 0 && s.clock.Now() >= stopTick {
 			return nil
 		}
-		// 1. 空闲时快进到下一事件时刻（无任务可运行，不计入任何任务）。
+		// 1. 空闲时快进到下一事件/指令时刻（无任务可运行，不计入任何任务）。
 		if s.current == nil && len(s.ready) == 0 {
-			if s.events.len() == 0 {
+			next, ok := s.nextPendingTick()
+			if !ok {
 				return nil // 全部完成
 			}
-			next := s.events.peek().tick
 			if next > s.clock.Now() {
 				s.logf("idle until %d", next)
 				s.clock.advance(next - s.clock.Now())
@@ -138,6 +140,8 @@ func (s *Scheduler) runUntil(stopTick, maxSteps uint64) error {
 		for s.events.len() > 0 && s.events.peek().tick <= s.clock.Now() {
 			s.dispatch(s.events.pop())
 		}
+		// 2.5 处理当前时刻到期的全部控制指令（事件之后、抢占之前）。
+		s.processCommands()
 		// 3. 抢占检查（关闭抢占时跳过）。
 		if s.cfg.Preemptive {
 			s.preemptIfNeeded()
@@ -165,6 +169,19 @@ func (s *Scheduler) runUntil(stopTick, maxSteps uint64) error {
 			s.current = nil
 		}
 	}
+}
+
+// nextPendingTick 返回下一个需要唤醒调度循环的时刻：
+// 取事件队列与控制指令队列队首时刻的较小者。
+func (s *Scheduler) nextPendingTick() (uint64, bool) {
+	next, ok := uint64(0), false
+	if s.events.len() > 0 {
+		next, ok = s.events.peek().tick, true
+	}
+	if ct, cok := s.nextCommandTick(); cok && (!ok || ct < next) {
+		next, ok = ct, true
+	}
+	return next, ok
 }
 
 // dispatch 处理一个到期事件。
